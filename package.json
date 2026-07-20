@@ -1,0 +1,16 @@
+{
+  "name": "github-actions-training-demo",
+  "version": "1.0.0",
+  "description": "Demo project for GitHub Actions training",
+  "main": "src/app.js",
+  "scripts": {
+    "test": "jest --ci --coverage",
+    "lint": "eslint src/ tests/ --max-warnings 0",
+    "lint:fix": "eslint src/ tests/ --fix",
+    "smoke": "node scripts/smoke-test.js"
+  },
+  "devDependencies": {
+    "eslint": "^8.57.0",
+    "jest": "^29.7.0"
+  }
+}

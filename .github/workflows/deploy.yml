@@ -1,0 +1,188 @@
+# ============================================================
+# Workflow 2: deploy.yml
+# ============================================================
+# WHAT IT DOES:
+#   Deploys the app after the build-test workflow passes.
+#   Has a DRY_RUN mode so you can test the whole deploy
+#   pipeline without needing real secrets or a real server.
+#
+# ELI8 (Explain Like I'm 8):
+#   Imagine your LEGO set passed the checker. Now it's time
+#   to put it on the shelf for people to see. But first,
+#   we do a "pretend" run (dry run) to make sure we know
+#   exactly where to put it — without actually moving
+#   anything yet. 📦➡️🏠
+#
+# SECRET BEHAVIOR:
+#   - DRY_RUN=true  → no real secrets needed, workflow succeeds
+#   - DRY_RUN=false → DEPLOY_API_KEY secret MUST exist
+#     If it doesn't, Step 1 fails with a clear error message.
+# ============================================================
+
+name: "🚀 Deploy"
+
+on:
+  # ── Only trigger after build-test succeeds on main ───────
+  workflow_run:
+    workflows: ["🧪 Build & Test"]
+    types: [completed]
+    branches: [main]
+
+  # ── Manual trigger: run from Actions tab anytime ─────────
+  # This is your best option for testing before/after merge.
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        default: "staging"
+        type: choice
+        options: ["staging", "production"]
+      dry_run:
+        description: "Dry run (no real deployment)?"
+        required: true
+        default: "true"
+        type: boolean
+
+jobs:
+
+  # ──────────────────────────────────────────────────────────
+  # JOB: gate
+  # Don't deploy if the triggering workflow failed.
+  # Only relevant for workflow_run trigger.
+  # ──────────────────────────────────────────────────────────
+  gate:
+    name: "🚦 Gate Check"
+    runs-on: ubuntu-latest
+    # Skip this job on manual dispatch — user decides
+    if: github.event_name == 'workflow_run'
+
+    steps:
+      - name: "🚦 Check upstream workflow result"
+        run: |
+          RESULT="${{ github.event.workflow_run.conclusion }}"
+          echo "Upstream workflow result: $RESULT"
+          if [[ "$RESULT" != "success" ]]; then
+            echo "❌ Upstream build-test did not succeed. Halting deploy."
+            echo "   Go check the Build & Test workflow for errors."
+            exit 1
+          fi
+          echo "✅ Upstream build passed. Proceeding to deploy."
+
+  # ──────────────────────────────────────────────────────────
+  # JOB: deploy-staging
+  # Runs the deploy script against staging.
+  # ──────────────────────────────────────────────────────────
+  deploy-staging:
+    name: "🏗️ Deploy → Staging"
+    runs-on: ubuntu-latest
+    needs: []   # no 'gate' needed for manual dispatch
+    # Only run staging deploy when environment is staging OR
+    # when auto-triggered (workflow_run always targets staging first)
+    if: |
+      github.event_name == 'workflow_run' ||
+      (github.event_name == 'workflow_dispatch' && inputs.environment == 'staging')
+
+    environment:
+      name: staging
+      # In real use, add your URL: url: https://staging.myapp.com
+
+    steps:
+      - name: "📥 Checkout code"
+        uses: actions/checkout@v4
+
+      # ── Determine dry-run mode ────────────────────────────
+      # For workflow_run trigger: always dry-run from branches,
+      # real deploy only from main (you can adjust this logic).
+      # For workflow_dispatch: respect the user's input.
+      - name: "🔧 Set deploy parameters"
+        id: params
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            DRY="${{ inputs.dry_run }}"
+          else
+            # Auto-triggered: default to dry run for safety
+            DRY="true"
+          fi
+          echo "dry_run=$DRY" >> $GITHUB_OUTPUT
+          echo "version=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
+          echo "Deploy params → dry_run=$DRY, env=staging"
+
+      - name: "🚀 Run deploy script"
+        env:
+          DRY_RUN: ${{ steps.params.outputs.dry_run }}
+          DEPLOY_ENV: "staging"
+          APP_VERSION: ${{ steps.params.outputs.version }}
+          # ── Secret handling ────────────────────────────────
+          # If DRY_RUN=true  → secret not used, step succeeds
+          # If DRY_RUN=false → DEPLOY_API_KEY must be set
+          #   If it's missing, scripts/deploy.sh exits with:
+          #   "❌ AUTH FAILED: DEPLOY_API_KEY secret is not set."
+          #
+          # To add the secret:
+          #   GitHub repo → Settings → Secrets and variables
+          #   → Actions → New repository secret
+          #   Name: DEPLOY_API_KEY   Value: <your real key>
+          DEPLOY_API_KEY: ${{ secrets.DEPLOY_API_KEY }}
+        run: |
+          chmod +x scripts/deploy.sh
+          bash scripts/deploy.sh
+        # ELI8: We run our "moving to the shelf" script.
+        # If it's a dry run, we just PRETEND to move it.
+        # If it's real, we need the secret key to get in.
+        #
+        # SUCCESS (dry run) output:
+        #   ✅  Dry run complete — no real changes made.
+        #
+        # FAILURE (missing secret) output:
+        #   ❌ AUTH FAILED: DEPLOY_API_KEY secret is not set.
+        #      Fix: Go to Settings → Secrets → New repository secret
+
+      - name: "📋 Write deploy summary"
+        if: always()
+        run: |
+          echo "## 🚀 Deploy Summary — Staging" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Parameter   | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | staging |" >> $GITHUB_STEP_SUMMARY
+          echo "| Dry Run     | ${{ steps.params.outputs.dry_run }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Version     | ${{ steps.params.outputs.version }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Triggered by | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+
+  # ──────────────────────────────────────────────────────────
+  # JOB: deploy-production
+  # Only runs on manual dispatch to production.
+  # Requires manual approval via GitHub Environments
+  # (set up a "production" environment with required reviewers).
+  # ──────────────────────────────────────────────────────────
+  deploy-production:
+    name: "🏭 Deploy → Production"
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'workflow_dispatch' &&
+      inputs.environment == 'production'
+
+    environment:
+      name: production
+      # Add URL: url: https://myapp.com
+
+    steps:
+      - name: "📥 Checkout code"
+        uses: actions/checkout@v4
+
+      - name: "🔧 Set deploy parameters"
+        id: params
+        run: |
+          echo "dry_run=${{ inputs.dry_run }}" >> $GITHUB_OUTPUT
+          echo "version=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
+
+      - name: "🏭 Run production deploy"
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          DEPLOY_ENV: "production"
+          APP_VERSION: ${{ steps.params.outputs.version }}
+          DEPLOY_API_KEY: ${{ secrets.DEPLOY_API_KEY }}
+        run: |
+          chmod +x scripts/deploy.sh
+          bash scripts/deploy.sh

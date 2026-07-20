@@ -1,0 +1,19 @@
+# .github/actionlint.yaml
+# Configuration for actionlint — the local YAML linter for GitHub Actions.
+#
+# WHY THIS FILE EXISTS:
+#   actionlint knows about GitHub-hosted runners (ubuntu-latest, windows-latest)
+#   but it does NOT know about your custom self-hosted runner labels.
+#   Without this file it would flag [self-hosted, smoke-runner] as an error.
+#   This file tells actionlint: "trust these custom labels."
+#
+# DOCS: https://github.com/rhysd/actionlint/blob/main/docs/config.md
+
+self-hosted-runner:
+  labels:
+    # Add your custom runner labels here.
+    # These are the same strings you used in runs-on: [self-hosted, <label>]
+    - linux-node        # Example: Linux runner with Node.js pre-installed
+    - smoke-runner      # Example: Dedicated smoke test runner
+    - windows-deploy    # Example: Windows runner for Windows deploys
+    - macos-build       # Example: macOS runner for Apple builds

@@ -1,0 +1,180 @@
+# ============================================================
+# Workflow 3: smoke-test.yml
+# ============================================================
+# WHAT IT DOES:
+#   Runs quick sanity checks ("smoke tests") to verify the
+#   app still works after a deploy. Named after the old
+#   hardware test: "turn it on and check if smoke comes out."
+#
+# ELI8 (Explain Like I'm 8):
+#   After putting your LEGO set on the shelf, you do one
+#   final check: can you still see it? Does it look right?
+#   You're not rebuilding it — just making sure it survived
+#   the move. 🔍🧱
+#
+# BRANCH-SAFE TESTING STRATEGY:
+#   You can run this workflow on any branch WITHOUT merging
+#   to main. Three ways:
+#     1. Push to 'smoke-test/**' branch
+#     2. Open a Pull Request (runs automatically)
+#     3. Click "Run workflow" in the Actions tab (dispatch)
+# ============================================================
+
+name: "💨 Smoke Tests"
+
+on:
+  # ── Option 1: Push to a dedicated smoke-test branch ──────
+  # Create a branch like: smoke-test/my-feature
+  # Push to it → smoke tests run immediately.
+  # Your main branch is completely untouched.
+  push:
+    branches:
+      - "smoke-test/**"   # <-- dedicated testing branch pattern
+      - "main"
+
+  # ── Option 2: Pull Request trigger ───────────────────────
+  # Runs every time you open or update a PR to main.
+  # This is the standard "protect main" pattern.
+  pull_request:
+    branches:
+      - "main"
+    # Only run if relevant files changed (skip on docs-only PRs)
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "scripts/**"
+      - ".github/workflows/smoke-test.yml"
+
+  # ── Option 3: Manual trigger ─────────────────────────────
+  # Perfect for post-merge verification.
+  # Actions tab → "Smoke Tests" → Run workflow
+  workflow_dispatch:
+    inputs:
+      target_branch:
+        description: "Branch to smoke-test"
+        required: false
+        default: "main"
+      verbose:
+        description: "Verbose output?"
+        required: false
+        default: "false"
+        type: boolean
+
+  # ── Option 4: After deploy completes ─────────────────────
+  # Automatically smoke-test after a successful deploy.
+  workflow_run:
+    workflows: ["🚀 Deploy"]
+    types: [completed]
+
+jobs:
+
+  # ──────────────────────────────────────────────────────────
+  # JOB: smoke
+  # Run the smoke test script and report results.
+  # ──────────────────────────────────────────────────────────
+  smoke:
+    name: "💨 Smoke Test"
+    runs-on: ubuntu-latest
+    # ── Custom self-hosted runner example ─────────────────
+    # If you want smoke tests on your own machine/server:
+    # runs-on: [self-hosted, smoke-runner]
+    #
+    # HOW TO CONFIGURE actionlint FOR CUSTOM LABELS:
+    # Create .github/actionlint.yaml with:
+    #   self-hosted-runner:
+    #     labels:
+    #       - smoke-runner
+    #       - linux-node
+    # Then actionlint won't complain about unknown labels.
+
+    # Skip smoke tests if upstream deploy failed
+    if: |
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
+
+    steps:
+      - name: "📥 Checkout code"
+        uses: actions/checkout@v4
+        with:
+          # On manual dispatch, check out the specified branch
+          ref: ${{ inputs.target_branch || github.ref }}
+          # ELI8: We grab the right version of the code.
+          # If you said "test branch X", we get branch X.
+
+      - name: "⚙️ Set up Node.js"
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: "📦 Install dependencies"
+        run: npm ci
+
+      - name: "💨 Run smoke tests"
+        id: smoke
+        run: |
+          if [[ "${{ inputs.verbose }}" == "true" ]]; then
+            set -x   # Print every command
+          fi
+          npm run smoke
+        # ELI8: We run the quick "is it still alive?" checks.
+        # With verbose=true, you see every single thing it does.
+        #
+        # SUCCESS output:
+        #   🔥 Running smoke tests...
+        #   ✅ PASS  add() returns correct value
+        #   ✅ PASS  divide() works for happy path
+        #   ✅ PASS  divide() throws on zero
+        #   📊 Results: 3 passed, 0 failed
+        #   🎉 All smoke tests passed!
+        #
+        # FAILURE output:
+        #   🔥 Running smoke tests...
+        #   ✅ PASS  add() returns correct value
+        #   ❌ FAIL  divide() works for happy path
+        #             Expected 5, got NaN
+        #   📊 Results: 1 passed, 1 failed
+        #   💥 Smoke tests FAILED. Do not proceed with deployment.
+
+      # ── Report back to the PR (if triggered by PR) ───────
+      - name: "💬 Comment on PR"
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const outcome = '${{ steps.smoke.outcome }}';
+            const emoji   = outcome === 'success' ? '✅' : '❌';
+            const status  = outcome === 'success' ? 'ALL PASSED' : 'SOME FAILED';
+            const body = [
+              `## ${emoji} Smoke Test Results`,
+              '',
+              `**Status:** ${status}`,
+              `**Branch:** \`${{ github.head_ref }}\``,
+              `**Commit:** \`${{ github.sha }}\``,
+              '',
+              outcome === 'success'
+                ? '🎉 All smoke tests passed! Safe to merge.'
+                : '💥 Smoke tests failed. Check the [Actions log](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.',
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              owner:   context.repo.owner,
+              repo:    context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body,
+            });
+          # ELI8: After checking the LEGO set, this step posts
+          # a message on the PR like a sticky note saying
+          # "✅ Looks great!" or "❌ Something broke!"
+
+      - name: "📋 Write smoke test summary"
+        if: always()
+        run: |
+          echo "## 💨 Smoke Test Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Result |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Smoke Tests | ${{ steps.smoke.outcome == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Trigger: \`${{ github.event_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "Branch:  \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY

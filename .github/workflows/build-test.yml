@@ -1,0 +1,201 @@
+# ============================================================
+# Workflow 1: build-test.yml
+# ============================================================
+# WHAT IT DOES:
+#   Every time someone pushes code or opens a Pull Request,
+#   this workflow automatically:
+#     1. Installs dependencies (npm install)
+#     2. Checks code style (ESLint)
+#     3. Runs all tests (Jest)
+#     4. Reports test coverage
+#
+# ELI8 (Explain Like I'm 8):
+#   Imagine you're building a LEGO set. Before you hand it
+#   to a friend, you check: are all the pieces the right
+#   color? (lint) Do they all fit together? (tests)
+#   This workflow is your automatic LEGO checker. 🧱
+# ============================================================
+
+name: "🧪 Build & Test"
+
+on:
+  # ── Trigger Option A: Any push to a feature branch ───────
+  # Use this BEFORE merging so you can test the workflow
+  # without touching main. Change 'feature/*' to your branch.
+  push:
+    branches:
+      - "main"
+      - "feature/**"
+      - "fix/**"
+      - "chore/**"
+
+  # ── Trigger Option B: Pull Request to main ───────────────
+  # This runs when someone opens/updates a PR targeting main.
+  # Best for team use — protects main from broken code.
+  pull_request:
+    branches:
+      - "main"
+
+  # ── Trigger Option C: Manual button in GitHub UI ─────────
+  # Go to Actions tab → "Build & Test" → Run workflow
+  # Great for testing after merge without waiting for a push.
+  workflow_dispatch:
+    inputs:
+      node_version:
+        description: "Node.js version to test with"
+        required: false
+        default: "20"
+        type: choice
+        options: ["18", "20", "22"]
+
+# Only allow one run per branch at a time.
+# If you push again while a run is in progress, cancel the old one.
+concurrency:
+  group: "build-test-${{ github.ref }}"
+  cancel-in-progress: true
+
+jobs:
+
+  # ──────────────────────────────────────────────────────────
+  # JOB: lint
+  # Check that code follows style rules (like a spell-checker
+  # but for code formatting and bad patterns).
+  # ──────────────────────────────────────────────────────────
+  lint:
+    name: "🔍 Lint (ESLint)"
+    runs-on: ubuntu-latest
+    # ── Custom self-hosted runner example ────────────────
+    # If you have a self-hosted runner tagged "linux-node",
+    # swap ubuntu-latest for: [self-hosted, linux-node]
+    # See the README section on actionlint config below.
+    # runs-on: [self-hosted, linux-node]
+
+    steps:
+      # Step 1: Download the code from GitHub to the runner
+      - name: "📥 Checkout code"
+        uses: actions/checkout@v4
+        # ELI8: Like downloading your homework file so you
+        # can start working on it.
+
+      # Step 2: Install Node.js (our code's engine)
+      - name: "⚙️ Set up Node.js"
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version || '20' }}
+          cache: "npm"
+          # ELI8: Installing the engine that runs our app.
+          # 'cache' means we save downloaded tools for next time
+          # so the workflow runs faster.
+
+      # Step 3: Install project dependencies
+      - name: "📦 Install dependencies"
+        run: npm ci
+        # ELI8: npm ci = "install exactly what the recipe says"
+        # (stricter than npm install — good for automation)
+
+      # Step 4: Run ESLint
+      - name: "🔍 Run ESLint"
+        run: npm run lint
+        # ELI8: ESLint is a robot that reads your code and
+        # says "hey, you forgot a semicolon!" or "this variable
+        # is unused!" so you can fix it before anyone sees it.
+        #
+        # SUCCESS output looks like:
+        #   > eslint src/ tests/ --max-warnings 0
+        #   (no output = all good!)
+        #
+        # FAILURE output looks like:
+        #   /src/app.js
+        #     5:10  error  'x' is defined but never used  no-unused-vars
+        #   ✖ 1 problem (1 error, 0 warnings)
+
+  # ──────────────────────────────────────────────────────────
+  # JOB: test
+  # Run all Jest unit tests and collect coverage.
+  # Runs in parallel with lint to save time.
+  # ──────────────────────────────────────────────────────────
+  test:
+    name: "🧪 Unit Tests (Jest)"
+    runs-on: ubuntu-latest
+    # This job needs lint to pass first. Remove 'needs' if you
+    # want tests to always run even when lint fails.
+    needs: [lint]
+
+    strategy:
+      # Test on multiple Node versions at once (matrix build)
+      matrix:
+        node: ["18", "20"]
+      # If one version fails, still run the others
+      fail-fast: false
+
+    steps:
+      - name: "📥 Checkout code"
+        uses: actions/checkout@v4
+
+      - name: "⚙️ Set up Node.js ${{ matrix.node }}"
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: "npm"
+
+      - name: "📦 Install dependencies"
+        run: npm ci
+
+      - name: "🧪 Run tests with coverage"
+        run: npm test
+        # ELI8: Jest runs all the little "does this work?"
+        # checks we wrote. Coverage tells us: which lines of
+        # our app did the tests actually touch?
+        #
+        # SUCCESS output looks like:
+        #   PASS  tests/app.test.js
+        #     Calculator
+        #       ✓ add: 2 + 3 = 5 (3 ms)
+        #       ✓ subtract: 10 - 4 = 6 (1 ms)
+        #       ✓ divide: 10 / 2 = 5 (1 ms)
+        #       ✓ divide: throws on divide by zero (5 ms)
+        #       ✓ add: throws on non-numbers (1 ms)
+        #   Test Suites: 1 passed, 1 total
+        #   Tests:       5 passed, 5 total
+        #   Coverage:    100%
+        #
+        # FAILURE output looks like:
+        #   FAIL  tests/app.test.js
+        #     ✕ add: 2 + 3 = 5 (4 ms)
+        #   ● add: 2 + 3 = 5
+        #     Expected: 5
+        #     Received: 6
+
+      # Upload coverage report as a downloadable artifact
+      - name: "📊 Upload coverage report"
+        uses: actions/upload-artifact@v4
+        if: always()   # upload even if tests failed (for debugging)
+        with:
+          name: "coverage-node-${{ matrix.node }}"
+          path: coverage/
+          retention-days: 7
+          # ELI8: This saves the coverage report as a file you
+          # can download from the Actions tab for 7 days.
+
+  # ──────────────────────────────────────────────────────────
+  # JOB: summary
+  # Post a friendly summary to the PR or workflow run.
+  # ──────────────────────────────────────────────────────────
+  summary:
+    name: "📋 Summary"
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    if: always()   # Run even if previous jobs failed
+
+    steps:
+      - name: "📋 Write job summary"
+        run: |
+          echo "## 🧪 Build & Test Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Job    | Result |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Lint   | ${{ needs.lint.result == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Test   | ${{ needs.test.result == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Branch: \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "Commit: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
